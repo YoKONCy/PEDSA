@@ -1,0 +1,36 @@
+[package]
+name = "PEDSA_Embedding"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "pedsa_embedding"
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+aho-corasick = "1.1"
+ahash = "0.8"
+smallvec = "1.11"
+rayon = "1.8"
+instant = "0.1"
+twox-hash = "1.6" # 高速 64-bit 哈希，用于 SimHash
+memmap2 = "0.9"
+bytemuck = { version = "1.14", features = ["derive", "min_const_generics"] }
+half = { version = "2", features = ["bytemuck", "rand_distr", "num-traits", "std"] }
+candle-core = { version = "0.9.2", features = [] }
+candle-nn = { version = "0.9.2", features = [] }
+candle-transformers = { version = "0.9.2", features = [] }
+tokenizers = { version = "0.22.0", features = ["onig"] }
+hf-hub = "0.3.2"
+serde_json = "1.0"
+
+[[bin]]
+name = "PEDSA_Embedding"
+path = "src/main.rs"
+
+[[bin]]
+name = "benchmark_latency"
+path = "src/benchmark_latency.rs"
