@@ -52,9 +52,6 @@
 
 <br/>
 
-<img src="./github_src/cover.png" width="100%" alt="PEDSA Cover"/>
-
-<br/>
 
 </div>
 
@@ -139,30 +136,30 @@ PEDSA V3 是一次彻底的底层重构，从传统的“内存对象树”转�
 
 ```mermaid
 flowchart TD
-    Input([User Input]) --> FeatureExtract[Feature Extraction & AC Automaton]
+    Input(["User Input"]) --> FeatureExtract["Feature Extraction & AC Automaton"]
     
     subgraph "Rational Track (Graph Diffusion)"
-        FeatureExtract --> Ontology[Ontology Activation]
-        Ontology --> Diffusion[Graph Energy Diffusion]
-        Diffusion --> Lateral[Lateral Inhibition (Top-K)]
-        Diffusion --> Inverse[Inverse Inhibition (Degree Penalty)]
-        Lateral --> Candidates1[Rational Candidates]
+        FeatureExtract --> Ontology["Ontology Activation"]
+        Ontology --> Diffusion["Graph Energy Diffusion"]
+        Diffusion --> Lateral["Lateral Inhibition (Top-K)"]
+        Diffusion --> Inverse["Inverse Inhibition (Degree Penalty)"]
+        Lateral --> Candidates1["Rational Candidates"]
     end
     
     subgraph "Chaotic Track (Vector Resonance)"
-        FeatureExtract --> L1Scan[L1: 1-bit Chaos Fingerprint Scan]
-        L1Scan --> L2Scan[L2: f16 Vector Cosine Similarity]
-        L2Scan --> Threshold{Similarity > 0.95?}
-        Threshold -- Yes --> Candidates2[Chaotic Candidates]
-        Threshold -- No --> Discard[Discard]
+        FeatureExtract --> L1Scan["L1: 1-bit Chaos Fingerprint Scan"]
+        L1Scan --> L2Scan["L2: f16 Vector Cosine Similarity"]
+        L2Scan --> Threshold{"Similarity > 0.95?"}
+        Threshold -- Yes --> Candidates2["Chaotic Candidates"]
+        Threshold -- No --> Discard["Discard"]
     end
     
-    Candidates1 --> Fusion[Weighted Fusion]
+    Candidates1 --> Fusion["Weighted Fusion"]
     Candidates2 --> Fusion
     
-    Fusion --> Decay[Ebbinghaus Decay]
-    Decay --> ReRank[Temporal & Affective Re-ranking]
-    ReRank --> Output([Final Memory Recall])
+    Fusion --> Decay["Ebbinghaus Decay"]
+    Decay --> ReRank["Temporal & Affective Re-ranking"]
+    ReRank --> Output(["Final Memory Recall"])
 ```
 
 <br/>
