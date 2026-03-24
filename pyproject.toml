@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pedsa"
+version = "0.1.0"
+description = "PEDSA - Brain-inspired RAG-less Memory Engine (Rust core with Python bindings)"
+requires-python = ">=3.12,<3.13"
+readme = "README.md"
+license = { text = "MIT" }
+keywords = ["memory", "retrieval", "graph", "cognitive", "rust"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ipython"]
+
+[tool.maturin]
+features = ["python"]
+module-name = "pedsa"
+python-source = "python"
+manifest-path = "Cargo.toml"

@@ -1,3 +1,32 @@
+# ── Rust ──
 /target
+
+# ── Python ──
+/.venv
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# ── Models (大文件) ──
 models/gliner-x-base/model.onnx
 models/.lock
+
+# ── SQLite ──
+*.db
+*.db-journal
+*.db-wal
+
+# ── OS / IDE ──
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
+
+# ── uv / maturin ──
+uv.lock

@@ -1,7 +1,7 @@
-use crate::AdvancedEngine;
+use crate::core::engine::AdvancedEngine;
 #[cfg(test)]
-use crate::embedding::CandleModel;
-use crate::SimHash;
+use crate::ml::embedding::CandleModel;
+use crate::core::simhash::SimHash;
 use std::time::Instant;
 
 fn test_scenario_17_pruning(engine: &mut AdvancedEngine) {
@@ -112,35 +112,50 @@ fn test_scenario_18_edge_types(engine: &mut AdvancedEngine) {
     }
 }
 
-pub fn run_all_scenarios(engine: &mut AdvancedEngine) {
+pub fn run_all_scenarios() {
+    println!("=== PEDSA RAG-less 高级实验框架 ===");
+    let mut engine = AdvancedEngine::new();
+
+    // 0. 加载模型 (如果存在)
+    if let Ok(model) = crate::ml::embedding::CandleModel::new() {
+        println!("已加载 {}维 Candle 向量模型 (BGE-M3 GGUF)", model.dimension);
+        engine.embedding_model = Some(model);
+    }
+
+    // 1. 加载数据
+    engine.load_standard_data();
+
+    // 2. 编译引擎
+    engine.compile();
+
     println!("\n--- 实验框架就绪 (双数据库架构) ---");
     println!("当前节点总数: {}", engine.nodes.len());
     println!("当前特征锚点: {}", engine.feature_keywords.len());
 
-    // 4. 执行硬核跨领域查询测试
-    test_scenario_1(engine);
-    test_scenario_2(engine);
-    test_scenario_3(engine);
-    test_scenario_4(engine);
-    test_scenario_5(engine);
-    test_scenario_6(engine);
-    test_scenario_7(engine);
-    test_scenario_8(engine);
-    test_scenario_9(engine);
-    test_scenario_10(engine);
-    test_scenario_11_ontology(engine);
-    test_scenario_11_temporal(engine);
-    test_scenario_12(engine);
-    test_scenario_13(engine);
-    test_scenario_14(engine);
-    test_scenario_15(engine);
-    test_scenario_16_chaos(engine);
-    test_scenario_17_pruning(engine);
-    test_scenario_18_edge_types(engine);
-    test_scenario_19_emotion(engine);
+    // 3. 执行硬核跨领域查询测试
+    test_scenario_1(&engine);
+    test_scenario_2(&engine);
+    test_scenario_3(&engine);
+    test_scenario_4(&engine);
+    test_scenario_5(&engine);
+    test_scenario_6(&engine);
+    test_scenario_7(&engine);
+    test_scenario_8(&engine);
+    test_scenario_9(&engine);
+    test_scenario_10(&engine);
+    test_scenario_11_ontology(&mut engine);
+    test_scenario_11_temporal(&mut engine);
+    test_scenario_12(&engine);
+    test_scenario_13(&engine);
+    test_scenario_14(&engine);
+    test_scenario_15(&mut engine);
+    test_scenario_16_chaos(&mut engine);
+    test_scenario_17_pruning(&mut engine);
+    test_scenario_18_edge_types(&mut engine);
+    test_scenario_19_emotion(&mut engine);
     
-    run_precision_evaluation(engine);
-    final_throughput_eval(engine);
+    run_precision_evaluation(&engine);
+    final_throughput_eval(&engine);
 }
 
 fn run_precision_evaluation(engine: &AdvancedEngine) {

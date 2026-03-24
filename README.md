@@ -211,21 +211,105 @@ flowchart TD
 
 ```bash
 PEDSA/
-├── models/             # 预训练模型 (BGE, GLiNER-X-Base ONNX)
+├── models/                    # 预训练模型 (BGE-M3 GGUF, GLiNER-X-Base ONNX)
+├── python/                    # Python 包
+│   └── pedsa/__init__.py      #   PyO3 原生模块的 re-export 入口
 ├── src/
-│   ├── main.rs         # 入口文件
-│   ├── lib.rs          # 库定义
-│   ├── embedding.rs    # 向量嵌入与模型加载
-│   ├── inference_engine.rs # 核心推理引擎
-│   ├── gliner_ner.rs   # GLiNER NER 集成 (gline-rs + jieba-rs)
-│   ├── storage.rs      # 存储引擎 (mmap, SoA)
-│   ├── dataset.rs      # 数据集生成与处理
-│   └── ...
-├── Cargo.toml          # Rust 项目配置
-├── 1. 项目白皮书.md      # 详细技术文档
-├── 2. 图谱构建提示词.md    # 核心 Prompts - 构建
-├── 3. 图谱修复提示词.md    # 核心 Prompts - 仲裁
-└── README.md           # 你正在读的文档
+│   ├── main.rs                # 入口 (纯 CLI 路由，20 行)
+│   ├── lib.rs                 # 库导出 + 条件编译 python 模块
+│   ├── tests.rs               # 集成测试 (19 个场景 + Precision@k)
+│   ├── python.rs              # PyO3 绑定 (Engine + SqliteStore)
+│   │
+│   ├── core/                  # 🧠 核心引擎
+│   │   ├── types.rs           #   数据结构 (Node, GraphEdge, ChaosStore)
+│   │   ├── simhash.rs         #   多模态语义指纹算法
+│   │   ├── stopwords.rs       #   停用词表
+│   │   ├── engine.rs          #   AdvancedEngine 定义与核心方法
+│   │   ├── retrieval.rs       #   多级检索管线 + DPP 多样性采样
+│   │   └── ontology.rs        #   本体维护 + LTD 剪枝 + 逻辑仲裁
+│   │
+│   ├── ml/                    # 🤖 机器学习模型集成
+│   │   ├── embedding.rs       #   Candle BGE-M3 嵌入模型
+│   │   ├── gliner_ner.rs      #   GLiNER-X-Base NER (可选, gline-rs + jieba-rs)
+│   │   └── inference_engine.rs#   GGUF 推理引擎
+│   │
+│   ├── data/                  # 📦 数据层
+│   │   ├── storage.rs         #   mmap 存储引擎 (SoA, SIMD, LSM-buffer)
+│   │   ├── store.rs           #   PedsaStore trait + 引擎同步工具
+│   │   ├── sqlite_store.rs    #   SQLite 持久化后端
+│   │   ├── dataset.rs         #   领域测试数据集 (6 域 + Ontology)
+│   │   └── data_loader.rs     #   数据加载策略
+│   │
+│   └── bench/                 # ⏱️ 基准测试
+│       ├── benchmarks.rs      #   V3 + 千万级压力测试
+│       └── benchmark_latency.rs#  单文本向量化延迟基准
+│
+├── .cargo/config.toml         # C/C++ CRT 统一配置 (/MD)
+├── Cargo.toml                 # Rust 项目配置 (features: default, gliner, python)
+├── pyproject.toml             # Python 包配置 (maturin + Python 3.12)
+├── .python-version            # Python 版本锁定 (3.12.13)
+├── 1. 项目白皮书.md            # 详细技术文档
+├── 2. 图谱构建提示词.md         # 核心 Prompts - 构建
+├── 3. 图谱修复提示词.md         # 核心 Prompts - 仲裁
+└── README.md                  # 你正在读的文档
+```
+
+### 🚀 Quick Start
+
+#### Rust CLI
+
+```bash
+# 默认模式：运行全部测试场景 (19 scenarios + Precision@k)
+cargo run
+
+# V3 基准测试
+cargo run -- --v3
+
+# 千万级压力测试
+cargo run -- --10m
+
+# 单文本向量化延迟基准
+cargo run -- --latency
+```
+
+#### Python (via PyO3)
+
+```bash
+# 1. 安装 Python 3.12 + uv 虚拟环境
+uv venv --python 3.12
+
+# 2. 安装 maturin 并编译原生扩展
+uv pip install maturin
+.venv/Scripts/maturin develop --release    # Windows
+# .venv/bin/maturin develop --release      # Linux/macOS
+```
+
+```python
+import pedsa
+
+# 创建引擎
+engine = pedsa.Engine()
+
+# 构建图谱
+rust_id = engine.get_or_create_feature("rust")
+engine.add_event(100, "Rust 在嵌入式领域取得重大突破")
+engine.add_edge(rust_id, 100, 0.95)
+engine.maintain_ontology("rust", "内存安全", "equality", 0.9)
+
+# 编译 & 检索
+engine.compile()
+results = engine.retrieve("Rust 内存安全")
+for nid, score in results:
+    print(f"[{nid}] {score:.4f}: {engine.get_node_content(nid)}")
+
+# 图谱遍历
+node = engine.get_node(100)          # 完整节点信息 (dict)
+edges = engine.get_edges(rust_id)    # 邻居列表 [(tgt, strength, type)]
+all_ids = engine.all_node_ids()      # 所有节点 ID
+
+# 持久化
+engine.export_to_sqlite("memory.db")
+engine.import_from_sqlite("memory.db")
 ```
 
 <br/>
@@ -234,7 +318,14 @@ PEDSA/
 
 > "这个项目本质上是一个 Graph 引擎。具体能检索到什么，完全取决于图构建得怎么样，所以几乎没什么通用性。不过，就我自用而言，单论在 AIRP 场景的记忆检索下，效果还挺不错的就是了。"
 
-> **Windows Debug 构建注意**: `esaxx-rs`（`tokenizers` 的间接依赖）存在一个已知的 **LNK2038 CRT 不匹配**链接错误，仅在 Windows Debug 模式下触发。请使用 `cargo build --release` / `cargo test --release` 编译，Release 模式下一切正常。
+### Feature Flags
+
+| Feature | 默认 | 说明 |
+| :--- | :---: | :--- |
+| `gliner` | ✅ | GLiNER-X-Base ONNX NER (gline-rs + ort)，禁用后降级为关键词匹配 |
+| `python` | ❌ | PyO3 绑定，通过 `maturin develop` 构建时自动启用 |
+
+> **Windows 构建注意**: `esaxx-rs`（`tokenizers` 的间接依赖）与 `ort_sys` 之间存在 CRT 不匹配 (`/MT` vs `/MD`)。项目通过 `.cargo/config.toml` 设置 `CFLAGS=/MD` 统一为动态 CRT，已解决。Python 构建 (`maturin develop`) 默认禁用 `gliner` feature 以避开 ONNX Runtime 链接冲突。
 
 <br/>
 

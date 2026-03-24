@@ -1,0 +1,5 @@
+[env]
+# cc crate: force /MD (dynamic CRT) for all C/C++ compilation
+# This resolves esaxx-rs /MT vs ort_sys /MD RuntimeLibrary mismatch
+CFLAGS = "/MD"
+CXXFLAGS = "/MD"
