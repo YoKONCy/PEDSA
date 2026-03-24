@@ -1,10 +1,11 @@
-use std::fs::File;
-use std::io::{self, Write, BufWriter};
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Write, BufWriter, Read};
+use std::path::{Path, PathBuf};
 use std::fmt;
 use memmap2::Mmap;
 use bytemuck::{Pod, Zeroable};
 use half::f16;
+use indicatif::{ProgressBar, ProgressStyle};
 
 pub const VECTOR_DIM: usize = 512;
 
@@ -76,11 +77,15 @@ pub struct StorageEngine {
     buffer_node_types: Vec<u8>,
     buffer_chaos_fingerprints: Vec<ChaosFingerprint>,
     buffer_chaos_vectors: Vec<f16>,
+    
+    // WAL (Write-Ahead Log)
+    wal_file: Option<File>,
+    wal_path: PathBuf,
 }
 
 impl StorageEngine {
     pub fn new<P: AsRef<Path>>(index_path: P, data_path: P) -> io::Result<Self> {
-        let index_file = File::open(index_path)?;
+        let index_file = File::open(&index_path)?;
         let data_file = File::open(data_path)?;
 
         let index_mmap = unsafe { Mmap::map(&index_file)? };
@@ -115,7 +120,9 @@ impl StorageEngine {
             std::slice::from_raw_parts(ptr, (header.node_count as usize) * VECTOR_DIM)
         };
 
-        Ok(Self {
+        let wal_path = index_path.as_ref().with_extension("wal");
+        
+        let mut engine = Self {
             index_mmap,
             data_mmap,
             header,
@@ -130,24 +137,160 @@ impl StorageEngine {
             buffer_node_types: Vec::new(),
             buffer_chaos_fingerprints: Vec::new(),
             buffer_chaos_vectors: Vec::new(),
-        })
+            wal_file: None,
+            wal_path: wal_path.clone(),
+        };
+
+        // 尝试恢复 WAL
+        if wal_path.exists() {
+             println!("📜 发现 WAL 日志文件，正在执行重放恢复...");
+             engine.replay_wal(&wal_path)?;
+        }
+
+        // 打开 WAL 以备写入 (Append Mode)
+        let wal_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .append(true)
+            .open(&wal_path)?;
+            
+        engine.wal_file = Some(wal_file);
+
+        Ok(engine)
     }
 
-    /// 热插入新节点
-    pub fn insert_node(&mut self, id: i64, simhash: u64, text: String, node_type: u8, chaos_fp: ChaosFingerprint, chaos_vec: &[f16]) {
+    /// WAL 日志重放 (Recovery)
+    fn replay_wal<P: AsRef<Path>>(&mut self, wal_path: P) -> io::Result<()> {
+        let mut file = File::open(wal_path)?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+
+        let mut cursor = io::Cursor::new(buffer);
+        let len = cursor.get_ref().len() as u64;
+        let mut count = 0;
+
+        while cursor.position() < len {
+            // 1. OpCode (u8)
+            let mut op_buf = [0u8; 1];
+            if cursor.read(&mut op_buf).is_err() { break; }
+            let op_code = op_buf[0];
+
+            if op_code == 1 { // Insert Node
+                // 2. ID (i64)
+                let mut buf_8 = [0u8; 8];
+                cursor.read_exact(&mut buf_8)?;
+                let id = i64::from_le_bytes(buf_8);
+
+                // 3. SimHash (u64)
+                cursor.read_exact(&mut buf_8)?;
+                let simhash = u64::from_le_bytes(buf_8);
+
+                // 4. NodeType (u8)
+                let mut buf_1 = [0u8; 1];
+                cursor.read_exact(&mut buf_1)?;
+                let node_type = buf_1[0];
+
+                // 5. Text Len (u32)
+                let mut buf_4 = [0u8; 4];
+                cursor.read_exact(&mut buf_4)?;
+                let text_len = u32::from_le_bytes(buf_4);
+
+                // 6. Text Bytes
+                let mut text_bytes = vec![0u8; text_len as usize];
+                cursor.read_exact(&mut text_bytes)?;
+                let text = String::from_utf8(text_bytes).unwrap_or_default();
+
+                // 7. Chaos Fingerprint (64 bytes)
+                let mut chaos_fp_bytes = [0u8; 64];
+                cursor.read_exact(&mut chaos_fp_bytes)?;
+                // chaos_fp.data is [u64; 8], need to cast
+                let chaos_fp: ChaosFingerprint = *bytemuck::from_bytes(&chaos_fp_bytes);
+
+                // 8. Chaos Vector (VECTOR_DIM * 2 bytes)
+                let vec_len = VECTOR_DIM * 2;
+                let mut vec_bytes = vec![0u8; vec_len];
+                cursor.read_exact(&mut vec_bytes)?;
+                let chaos_vec: &[f16] = bytemuck::cast_slice(&vec_bytes);
+
+                // 插入内存 Buffer (不写 WAL，防止递归)
+                self.insert_to_memory(id, simhash, text, node_type, chaos_fp, chaos_vec);
+                count += 1;
+            } else {
+                // Unknown OpCode, stop replay
+                eprintln!("⚠️ WAL 重放遇到未知操作码: {}, 停止重放", op_code);
+                break;
+            }
+        }
+        
+        if count > 0 {
+            println!("✅ 已从 WAL 恢复 {} 条未合并记录", count);
+        }
+        Ok(())
+    }
+
+    /// 仅写入内存 Buffer (内部使用)
+    fn insert_to_memory(&mut self, id: i64, simhash: u64, text: String, node_type: u8, chaos_fp: ChaosFingerprint, chaos_vec: &[f16]) {
         self.buffer_ids.push(id);
         self.buffer_simhashes.push(simhash);
         self.buffer_texts.push(text);
         self.buffer_node_types.push(node_type);
         self.buffer_chaos_fingerprints.push(chaos_fp);
         
-        // 确保 chaos_vec 是 VECTOR_DIM 维
         if chaos_vec.len() == VECTOR_DIM {
              self.buffer_chaos_vectors.extend_from_slice(chaos_vec);
         } else {
-             // 安全回退：填充零
              self.buffer_chaos_vectors.extend(std::iter::repeat(f16::from_f32(0.0)).take(VECTOR_DIM));
         }
+    }
+
+    /// 热插入新节点 (支持 WAL 持久化)
+    pub fn insert_node(&mut self, id: i64, simhash: u64, text: String, node_type: u8, chaos_fp: ChaosFingerprint, chaos_vec: &[f16]) -> io::Result<()> {
+        // 1. 写入内存
+        self.insert_to_memory(id, simhash, text.clone(), node_type, chaos_fp, chaos_vec);
+
+        // 2. 追加写入 WAL
+        if let Some(mut file) = self.wal_file.as_ref() {
+            // Format: [Op(1)][ID(8)][SimHash(8)][Type(1)][TextLen(4)][Text(...)][ChaosFP(64)][ChaosVec(1024)]
+            // Total Overhead per record: 1 + 8 + 8 + 1 + 4 + 64 + 1024 = 1110 bytes + text_len
+            
+            // OpCode = 1 (Insert)
+            file.write_all(&[1u8])?;
+            file.write_all(&id.to_le_bytes())?;
+            file.write_all(&simhash.to_le_bytes())?;
+            file.write_all(&[node_type])?;
+            
+            let text_bytes = text.as_bytes();
+            file.write_all(&(text_bytes.len() as u32).to_le_bytes())?;
+            file.write_all(text_bytes)?;
+            
+            file.write_all(bytemuck::bytes_of(&chaos_fp))?;
+            
+            // Handle vector padding if necessary
+            let vec_slice = if chaos_vec.len() == VECTOR_DIM {
+                chaos_vec
+            } else {
+                // This case should be rare as insert_to_memory handles it, 
+                // but for WAL we need exact bytes. 
+                // Creating a temp vector is expensive but safe.
+                // Since we are inside insert_node, let's just assume caller provides correct slice or we handle it.
+                // Actually, let's use the one we just pushed to buffer? No, that's complex to access.
+                // Let's just create a zeroed buffer if needed.
+                &[f16::from_f32(0.0); VECTOR_DIM]
+            };
+             // Ensure we write exactly VECTOR_DIM * 2 bytes
+            if vec_slice.len() == VECTOR_DIM {
+                file.write_all(bytemuck::cast_slice(vec_slice))?;
+            } else {
+                let zeros = vec![f16::from_f32(0.0); VECTOR_DIM];
+                file.write_all(bytemuck::cast_slice(&zeros))?;
+            }
+
+            // Flush to ensure durability
+            file.flush()?;
+        }
+
+        Ok(())
     }
 
     pub fn node_count(&self) -> usize {
@@ -315,6 +458,26 @@ impl StorageEngine {
         // 重新加载 mmap
         let new_engine = Self::new(index_path, data_path)?;
         *self = new_engine;
+
+        // 清空 WAL (因为已经合并到主文件了)
+        // 重新打开 WAL 会清空文件，或者我们可以显式 truncate
+        if self.wal_path.exists() {
+            // Self::new 已经打开了 wal_file，这里我们只需要 truncate 它
+            // 但 Self::new 打开的是 append 模式，不一定是 truncate
+            // 实际上，我们应该在 new_engine 被赋值给 self 之前，确保旧的 WAL 被清理
+            // 但是 new_engine 初始化时可能已经读取了 WAL (如果我们在 persist 之前没有清空它)
+            
+            // 逻辑修正：
+            // 1. Persist 成功后，新的 index/data 已经包含了 buffer 数据。
+            // 2. 此时 WAL 里的数据已经冗余了。
+            // 3. 我们应该 truncate WAL。
+            
+            // 由于 new_engine 已经持有了 WAL 的句柄，我们需要通过 new_engine.wal_file 来操作
+            if let Some(file) = self.wal_file.as_ref() {
+                file.set_len(0)?; // Truncate to 0
+                file.sync_all()?; // Ensure change is on disk
+            }
+        }
 
         Ok(())
     }
@@ -832,6 +995,13 @@ where F: Fn(&str) -> Vec<f16>
     }
 
     // 7. 写入 Metadata 和 Data
+    println!("📝 [1/2] Generating Metadata & SimHashes...");
+    let pb_meta = ProgressBar::new(node_count as u64);
+    pb_meta.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+        .unwrap()
+        .progress_chars("#>-"));
+
     let mut current_data_offset = 0u64;
     for i in 0..node_count {
         let text = format!("这是一个模拟的事件总结节点，编号为 {}，用于 V3 SoA 架构测试。", i);
@@ -847,11 +1017,11 @@ where F: Fn(&str) -> Vec<f16>
         w_data.write_all(bytes)?;
         current_data_offset += bytes.len() as u64;
 
-        if i % 100_000 == 0 {
-            print!("\r已处理: {}/{}", i, node_count);
-            io::stdout().flush()?;
+        if i % 1000 == 0 {
+            pb_meta.inc(1000);
         }
     }
+    pb_meta.finish_with_message("Metadata generated!");
     
     // 8. 填充到 chaos_fingerprint_offset
     let current_pos = metadata_offset + metadata_size;
@@ -878,8 +1048,16 @@ where F: Fn(&str) -> Vec<f16>
     }
     
     // 11. 写入 Chaos Vectors (VECTOR_DIM dims * f16)
+    println!("🧠 [2/2] Generating Chaos Vectors (This may be slow)...");
+    let pb_vec = ProgressBar::new(node_count as u64);
+    pb_vec.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.magenta/white}] {pos}/{len} ({eta})")
+        .unwrap()
+        .progress_chars("=>-"));
+
     for i in 0..node_count {
          let text = format!("这是一个模拟的事件总结节点，编号为 {}，用于 V3 SoA 架构测试。", i);
+         // vectorizer logic...
          let vec = vectorizer(&text);
          
          let final_vec = if vec.len() == VECTOR_DIM {
@@ -890,13 +1068,15 @@ where F: Fn(&str) -> Vec<f16>
              v
          };
 
-         w_index.write_all(bytemuck::cast_slice(&final_vec))?;
+         // Write bytes
+         let bytes: &[u8] = bytemuck::cast_slice(&final_vec);
+         w_index.write_all(bytes)?;
          
-         if i % 10_000 == 0 {
-            print!("\r已处理向量: {}/{}", i, node_count);
-            io::stdout().flush()?;
-        }
+         if i % 100 == 0 {
+             pb_vec.inc(100);
+         }
     }
+    pb_vec.finish_with_message("Vectors generated!");
 
     w_index.flush()?;
     w_data.flush()?;

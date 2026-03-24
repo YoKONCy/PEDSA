@@ -1,1 +1,3 @@
 /target
+models/gliner-x-base/model.onnx
+models/.lock/

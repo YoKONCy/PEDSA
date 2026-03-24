@@ -12,9 +12,11 @@ mod tests;
 mod storage;
 mod embedding;
 mod inference_engine;
+mod gliner_ner;
 use storage::{generate_binary_dataset, StorageEngine, ChaosFingerprint};
 use dataset::{get_tech_domain_data, get_social_domain_data, get_history_domain_data, get_value_domain_data, get_daily_domain_data, get_timeline_domain_data, get_ontology_data};
 use embedding::CandleModel;
+use gliner_ner::GlinerEngine;
 
 // ============================================================================
 // 1. 语义指纹 (SimHash V2: Partitioned Multimodal)
@@ -411,6 +413,9 @@ pub struct AdvancedEngine {
 
     // 第四阶段: Candle 嵌入模型
     pub embedding_model: Option<CandleModel>,
+
+    // GLiNER-X-Base: 实体类型 + 时间 span 提取 (替代硬编码 contains())
+    pub gliner_engine: Option<GlinerEngine>,
 }
 
 impl AdvancedEngine {
@@ -428,6 +433,7 @@ impl AdvancedEngine {
             affective_index: AHashMap::new(),
             async_task: Box::new(MockAsyncTask),
             embedding_model: None,
+            gliner_engine: None,
         }
     }
 
@@ -542,15 +548,29 @@ impl AdvancedEngine {
 
     /// 添加事件节点
     pub fn add_event(&mut self, id: i64, summary: &str, chaos_fp: Option<ChaosFingerprint>, chaos_vec: Option<Vec<f16>>) {
-        // 自动提取时间戳
-        let timestamp = Self::extract_timestamp(summary);
+        // 自动提取时间戳 (原始解析器)
+        let mut timestamp = Self::extract_timestamp(summary);
 
-        // 自动提取情感 (新: 自动情感提取)
+        // 自动提取情感
         let emotion_val = SimHash::extract_emotion(summary);
 
-        // V2: 在入库时自动进行时空/情感特征提取 (自动打标)
-        // 使用提取到的绝对时间戳和情感值来计算初始指纹
-        let fingerprint = SimHash::compute_multimodal(summary, timestamp, emotion_val, 0);
+        // GLiNER 增强: 提取实体类型 + 补充时间
+        let type_val = if let Some(gliner) = &self.gliner_engine {
+            let (type_entities, time_entities) = gliner.extract_all(summary);
+            
+            // 如果原始解析器未提取到时间，用 GLiNER 补充
+            if timestamp == 0 && !time_entities.is_empty() {
+                let ref_time = instant::Instant::now().elapsed().as_secs(); // 近似
+                timestamp = gliner_ner::best_timestamp(&time_entities, ref_time);
+            }
+            
+            gliner_ner::best_type_val(&type_entities)
+        } else {
+            SimHash::TYPE_UNKNOWN
+        };
+
+        // V2: 在入库时自动进行时空/情感/类型特征提取 (自动打标)
+        let fingerprint = SimHash::compute_multimodal(summary, timestamp, emotion_val, type_val);
 
         // V3 第四阶段: 自动向量化 (混沌向量)
         let mut chaos_fingerprint = chaos_fp.unwrap_or(ChaosFingerprint::default());
@@ -920,6 +940,25 @@ impl AdvancedEngine {
             }
         }
 
+        // GLiNER-X-Base 初始化
+        match GlinerEngine::new("models/gliner-x-base") {
+            Ok(mut engine) => {
+                // 将 Feature 节点的关键词加入 jieba 自定义词典
+                let mut custom_count = 0;
+                for node in self.nodes.values() {
+                    if node.node_type == NodeType::Feature && node.content.len() >= 2 {
+                        engine.add_custom_word(&node.content);
+                        custom_count += 1;
+                    }
+                }
+                println!("🏷️  GLiNER-X-Base 已加载 (ONNX Runtime), {} 个自定义词", custom_count);
+                self.gliner_engine = Some(engine);
+            }
+            Err(e) => {
+                println!("⚠️  GLiNER 未加载: {}, 降级为关键词匹配", e);
+            }
+        }
+
         println!("🚀 引擎编译完成：{} 个特征锚点, {} 个总节点, {} 个时空桶, {} 个情感维度", 
             self.feature_keywords.len(), self.nodes.len(), self.temporal_index.len(), self.affective_index.len());
     }
@@ -977,9 +1016,24 @@ impl AdvancedEngine {
     pub fn retrieve(&self, query: &str, ref_time: u64, chaos_level: f32) -> Vec<(i64, f32)> {
         let mut activated_keywords = AHashMap::new();
         let query_lower = query.to_lowercase();
-        // V2: 使用智能指纹生成，提取时空/情感特征
-        // 传入 ref_time 以支持相对时间解析
-        let query_fp = SimHash::compute_for_query(&query_lower, ref_time);
+
+        // V3: GLiNER 驱动的指纹生成 (回退到硬编码 compute_for_query)
+        let query_fp = if let Some(gliner) = &self.gliner_engine {
+            let (type_entities, time_entities) = gliner.extract_all(&query_lower);
+            
+            // TYPE: 取最高置信度的类型
+            let type_val = gliner_ner::best_type_val(&type_entities);
+            
+            // TEMPORAL: 取最高置信度且可解析的时间 span
+            let timestamp = gliner_ner::best_timestamp(&time_entities, ref_time);
+            
+            // AFFECTIVE: 保持现有关键词匹配 (GLiNER 不适合情感分类)
+            let emotion = SimHash::extract_emotion(&query_lower);
+            
+            SimHash::compute_multimodal(&query_lower, timestamp, emotion, type_val)
+        } else {
+            SimHash::compute_for_query(&query_lower, ref_time)
+        };
 
         // --- Step 1: 特征共振 (AC Matcher) - 极快 ---
         if let Some(matcher) = &self.ac_matcher {
@@ -1023,6 +1077,84 @@ impl AdvancedEngine {
             }
         }
 
+        // --- Step 1.9: BM25 暴力兜底 (Cold-Start Fallback) ---
+        // 当 AC 自动机 + 时间共振 + 情感共振 全部未命中时触发
+        // 场景: 图谱尚未完善，用户输入没有任何词被 Ontology 覆盖
+        if activated_keywords.is_empty() {
+            // 分词: 优先 jieba (来自 GLiNER)，否则用字符 bigram
+            let query_tokens: Vec<String> = if let Some(gliner) = &self.gliner_engine {
+                gliner.jieba.cut(&query_lower, false)
+                    .into_iter()
+                    .filter(|t| t.len() >= 2) // 过滤单字符
+                    .map(|t| t.to_string())
+                    .collect()
+            } else {
+                // 字符 bigram 回退
+                let chars: Vec<char> = query_lower.chars().collect();
+                chars.windows(2).map(|w| w.iter().collect::<String>()).collect()
+            };
+
+            if !query_tokens.is_empty() {
+                // BM25 参数
+                let k1: f32 = 1.2;
+                let b: f32 = 0.75;
+                
+                // 预计算: 文档总数 & 平均长度
+                let event_nodes: Vec<&Node> = self.nodes.values()
+                    .filter(|n| n.node_type == NodeType::Event)
+                    .collect();
+                let n_docs = event_nodes.len() as f32;
+                if n_docs > 0.0 {
+                    let avg_dl: f32 = event_nodes.iter()
+                        .map(|n| n.content.len() as f32)
+                        .sum::<f32>() / n_docs;
+
+                    // IDF: 统计每个 query token 出现在多少文档中
+                    let mut df: AHashMap<&str, u32> = AHashMap::new();
+                    for token in &query_tokens {
+                        for node in &event_nodes {
+                            if node.content.contains(token.as_str()) {
+                                *df.entry(token.as_str()).or_default() += 1;
+                            }
+                        }
+                    }
+
+                    // 对每个 Event 节点打分
+                    let mut bm25_scores: Vec<(i64, f32)> = Vec::new();
+                    for node in &event_nodes {
+                        let dl = node.content.len() as f32;
+                        let mut score = 0.0f32;
+                        
+                        for token in &query_tokens {
+                            let tf = node.content.matches(token.as_str()).count() as f32;
+                            if tf == 0.0 { continue; }
+                            
+                            let doc_freq = *df.get(token.as_str()).unwrap_or(&1) as f32;
+                            let idf = ((n_docs - doc_freq + 0.5) / (doc_freq + 0.5) + 1.0).ln();
+                            
+                            let tf_norm = (tf * (k1 + 1.0)) / (tf + k1 * (1.0 - b + b * dl / avg_dl));
+                            score += idf * tf_norm;
+                        }
+                        
+                        if score > 0.0 {
+                            bm25_scores.push((node.id, score));
+                        }
+                    }
+                    
+                    // 归一化 + 取 Top-20
+                    if !bm25_scores.is_empty() {
+                        bm25_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                        let max_score = bm25_scores[0].1;
+                        
+                        for (id, score) in bm25_scores.iter().take(20) {
+                            let normalized = score / max_score * 0.4; // BM25 信号上限 0.4 (弱于精确匹配)
+                            activated_keywords.insert(*id, normalized);
+                        }
+                    }
+                }
+            }
+        }
+
         // --- Step 2: 第一数据库 (Ontology 定义库) 扩散 ---
         let mut ontology_expanded = activated_keywords.clone();
         for (&node_id, &score) in &activated_keywords {
@@ -1049,8 +1181,11 @@ impl AdvancedEngine {
                         continue;
                     }
                     
-                    // 计算基础能量 (含权重和反向抑制)
-                    let energy = score * weight * 0.95 * inhibition_factor;
+                    // 计算基础能量 (共现增益: log 衰减 + 反向抑制)
+                    // log(1 + w*65535) / log(65536) 将线性权重映射为对数曲线
+                    // 效果: 高频边的边际收益递减，低频边获得更多相对能量
+                    let log_weight = (1.0 + weight * 65535.0).ln() / (65536.0_f32).ln();
+                    let energy = score * log_weight * 0.95 * inhibition_factor;
                     
                     if edge.edge_type == SimHash::EDGE_INHIBITION {
                         // 抑制传递：扣减能量
@@ -1106,7 +1241,9 @@ impl AdvancedEngine {
                             let degree = self.in_degrees.get(&edge.target_node_id).unwrap_or(&1);
                             let inhibition_factor = 1.0 / (1.0 + (*degree as f32).log10());
 
-                            let energy = score * weight * decay * inhibition_factor;
+                            // 共现增益: log 衰减 (与 Ontology 层一致)
+                            let log_weight = (1.0 + weight * 65535.0).ln() / (65536.0_f32).ln();
+                            let energy = score * log_weight * decay * inhibition_factor;
                             
                             // Memory 层阈值稍低，保留更多细节
                             if energy < 0.01 { continue; } 
@@ -1260,7 +1397,106 @@ impl AdvancedEngine {
         }
         
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        // --- Step 6: DPP 贪心多样性采样 (Determinantal Point Process) ---
+        // 防止同一 Feature 关联的多个 Event 霸占 Top-K
+        // 参考: Kulesza & Taskar, 2012, "Determinantal Point Processes for Machine Learning"
+        if results.len() > 10 {
+            let dpp_candidates = results.len().min(50);
+            let dpp_select = 10; // 最终返回数
+            let selected_indices = self.dpp_greedy_select(&results[..dpp_candidates], dpp_select);
+            
+            // 重组: DPP 选中的 + 剩余的 (保持 DPP 顺序优先)
+            let mut dpp_results: Vec<(i64, f32)> = selected_indices.iter()
+                .map(|&i| results[i])
+                .collect();
+            // 附加 DPP 候选范围外的结果
+            for item in results.iter().skip(dpp_candidates) {
+                dpp_results.push(*item);
+            }
+            return dpp_results;
+        }
+
         results
+    }
+
+    /// DPP 贪心多样性采样
+    /// 基于 SimHash 汉明距离构建相似度核矩阵，贪心最大化 log-det
+    fn dpp_greedy_select(&self, candidates: &[(i64, f32)], k: usize) -> Vec<usize> {
+        let n = candidates.len();
+        if n <= k {
+            return (0..n).collect();
+        }
+
+        // 1. 构建质量因子 q_i = score^0.8 (略微压缩分数差距)
+        let quality: Vec<f32> = candidates.iter()
+            .map(|(_, s)| s.max(1e-10).powf(0.8))
+            .collect();
+
+        // 2. 构建相似度矩阵 S_ij (基于 SimHash 汉明距离)
+        //    S_ij = 1 - hamming(fp_i, fp_j) / 32  (语义区 32 位)
+        let fingerprints: Vec<u64> = candidates.iter()
+            .map(|(id, _)| self.nodes.get(id).map_or(0, |n| n.fingerprint))
+            .collect();
+
+        // 3. L-ensemble 核矩阵: L_ij = q_i * S_ij * q_j
+        //    对角线 L_ii = q_i² (自相似度 = 1)
+        let mut diag: Vec<f32> = vec![0.0; n]; // L_ii
+        for i in 0..n {
+            diag[i] = quality[i] * quality[i];
+        }
+
+        // 4. 贪心选择 (增量 Cholesky)
+        let mut selected: Vec<usize> = Vec::with_capacity(k);
+        let mut c = vec![vec![0.0f32; n]; k]; // Cholesky 增量列
+        let mut d = diag.clone(); // 当前条件方差
+
+        for j in 0..k {
+            // 找边际增益最大的 (排除已选)
+            let mut best = 0;
+            let mut best_val = f32::NEG_INFINITY;
+            for i in 0..n {
+                if selected.contains(&i) { continue; }
+                if d[i] > best_val {
+                    best_val = d[i];
+                    best = i;
+                }
+            }
+            selected.push(best);
+
+            if j == k - 1 { break; }
+            if d[best] < 1e-10 { break; }
+
+            // 计算 L[best, :] 行 (按需计算，不存储完整矩阵)
+            let fp_best = fingerprints[best];
+            let q_best = quality[best];
+
+            for i in 0..n {
+                // S_ij: SimHash 语义区相似度
+                let fp_i = fingerprints[i];
+                let semantic_best = fp_best & SimHash::MASK_SEMANTIC;
+                let semantic_i = fp_i & SimHash::MASK_SEMANTIC;
+                let hamming = (semantic_best ^ semantic_i).count_ones() as f32;
+                let sim = 1.0 - hamming / 32.0;
+
+                let l_val = q_best * sim * quality[i];
+
+                // Cholesky 更新
+                let mut c_j_i = l_val;
+                for p in 0..j {
+                    c_j_i -= c[p][best] * c[p][i];
+                }
+                c[j][i] = c_j_i / d[best].sqrt();
+            }
+
+            // 更新条件方差
+            for i in 0..n {
+                d[i] -= c[j][i] * c[j][i];
+                if d[i] < 0.0 { d[i] = 0.0; }
+            }
+        }
+
+        selected
     }
 
     /// 模拟 LLM 维护过程：对话后分析关键词关联并更新 Ontology
@@ -1407,9 +1643,16 @@ fn main() {
         let data_path = "pedsa_v3.dat";
 
         // 在此作用域全局加载模型
-        let model = embedding::CandleModel::new().ok();
+        let model = if !args.contains(&"--no-chaos".to_string()) {
+            embedding::CandleModel::new().ok()
+        } else {
+            None
+        };
+
         if let Some(m) = &model {
             println!("🧠 已加载 {}维 Candle 向量模型 (BGE-Small-ZH)", m.dimension);
+        } else {
+            println!("🚫 混沌轨道 (Chaos Track) 已禁用 (No Vector Model Loaded)");
         }
 
         // --- 阶段 3: 为加权向量化准备 AC 自动机 ---
@@ -1489,8 +1732,11 @@ fn main() {
             };
             let chaos_fp = StorageEngine::quantize_vector(&chaos_vec);
             
-            storage.insert_node(999999999, hot_node_fp, hot_node_text.to_string(), 1, chaos_fp, &chaos_vec);
-            println!("✅ 已成功热插入新节点 (ID: 999999999)");
+            if let Err(e) = storage.insert_node(999999999, hot_node_fp, hot_node_text.to_string(), 1, chaos_fp, &chaos_vec) {
+                eprintln!("❌ 热插入失败: {}", e);
+            } else {
+                println!("✅ 已成功热插入新节点 (ID: 999999999)");
+            }
 
         println!("📚 节点总数: {} (磁盘: {} + 缓冲区: 1)", storage.node_count(), node_count);
 
