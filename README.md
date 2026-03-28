@@ -218,7 +218,7 @@ PEDSA/
 │   ├── main.rs                # 入口 (纯 CLI 路由，20 行)
 │   ├── lib.rs                 # 库导出 + 条件编译 python 模块
 │   ├── tests.rs               # 集成测试 (19 个场景 + Precision@k)
-│   ├── python.rs              # PyO3 绑定 (Engine + SqliteStore)
+│   ├── python.rs              # PyO3 绑定
 │   │
 │   ├── core/                  # 🧠 核心引擎
 │   │   ├── types.rs           #   数据结构 (Node, GraphEdge, ChaosStore)
@@ -234,11 +234,8 @@ PEDSA/
 │   │   └── inference_engine.rs#   GGUF 推理引擎
 │   │
 │   ├── data/                  # 📦 数据层
-│   │   ├── storage.rs         #   mmap 存储引擎 (SoA, SIMD, LSM-buffer)
-│   │   ├── store.rs           #   PedsaStore trait + 引擎同步工具
-│   │   ├── sqlite_store.rs    #   SQLite 持久化后端
 │   │   ├── dataset.rs         #   领域测试数据集 (6 域 + Ontology)
-│   │   └── data_loader.rs     #   数据加载策略
+│   │   └── data_loader.rs     #   数据加载策略 (持久化基座已全面升级为 TriviumDB)
 │   │
 │   └── bench/                 # ⏱️ 基准测试
 │       ├── benchmarks.rs      #   V3 + 千万级压力测试
