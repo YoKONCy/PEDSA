@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+#![allow(unused_imports)]
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 use twox_hash::XxHash64;
@@ -27,7 +29,7 @@ impl AdvancedEngine {
         all_events.extend(e6); all_edges.extend(d6);
 
         for ev in all_events {
-            self.add_event(ev.id, ev.summary, ev.chaos_fingerprint, ev.chaos_vector);
+            self.add_event(ev.id, ev.summary, 0, 0, 0);
             for feature in ev.features {
                 let feature_lower = feature.to_lowercase();
                 let mut s = XxHash64::with_seed(0);
@@ -63,10 +65,10 @@ impl AdvancedEngine {
     pub fn load_million_test_data(&mut self, node_count: usize) {
         println!("🏗️ 正在生成 {} 级大规模合成数据...", node_count);
         let start = Instant::now();
-        self.nodes.reserve(node_count + 50000);
-        self.graph.reserve(node_count + 50000);
-        self.keyword_to_node.reserve(50000);
-        self.feature_keywords.reserve(50000);
+        
+        
+        
+        
 
         let feature_count = 50_000;
         for i in 0..feature_count {
@@ -79,7 +81,7 @@ impl AdvancedEngine {
         for i in 0..event_count {
             let id = i as i64 + 2_000_000_000;
             let summary = format!("这是一个模拟的事件总结节点，编号为 {}，用于进行规模压力测试。PEDSA 算法应当在这种规模下依然保持极高的检索效率。", i);
-            self.add_event(id, &summary, None, None);
+            self.add_event(id, &summary, 0, 0, 0);
             let feat_idx = i % feature_count;
             let feat_id = feat_idx as i64 + 1_000_000_000;
             self.add_edge(feat_id, id, 1.0);

@@ -9,7 +9,7 @@ pub struct SimHash;
 
 impl SimHash {
     pub const MASK_SEMANTIC: u64 = 0xFFFFFFFF;
-    pub const MASK_TEMPORAL: u64 = 0xFFFF00000000; // [32-47]: 时间区 (仅时间 - V3 中已移除位置)
+    pub const MASK_TEMPORAL: u64 = 0xFFFF00000000; // [32-47]: 时间区 (仅时间 - V2 中已移除位置)
     pub const MASK_AFFECTIVE: u64 = 0x00FF000000000000;
     pub const MASK_TYPE: u64 = 0xFF00000000000000;
 
@@ -24,12 +24,10 @@ impl SimHash {
     #[allow(dead_code)]
     pub const TYPE_VALUES: u8 = 0x06;    // 价值观
 
-    // --- 边类型常量 (V3.5 类型化边 - 简化版) ---
+    // --- 边类型常量 (V2 类型化边 - 简化版) ---
     #[allow(dead_code)]
     pub const EDGE_REPRESENTATION: u8 = 0; // 表征 (Representation) - "看到 B 可能会想到 A" (单向/非等价)
-    pub const EDGE_EQUALITY: u8 = 1;       // 等价 (Equality) - "A 就是 B" (双向/零损耗)
-    pub const EDGE_INHIBITION: u8 = 255;   // 抑制 (Inhibition) - "A 与 B 互斥" (双向/负反馈)
-
+        
     // --- 情感常量 (Plutchik 情感轮位图 - 已调整) ---
     pub const EMOTION_JOY: u8          = 1 << 0; // 喜悦
     pub const EMOTION_SHY: u8          = 1 << 1; // 害羞

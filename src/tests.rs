@@ -58,17 +58,17 @@ fn test_scenario_18_edge_types(engine: &mut AdvancedEngine) {
     
     // Path 1: Normal (Assoc) -> Event_Normal
     engine.add_feature(1001, "TargetNormal");
-    engine.add_event(2001, "Event Normal Content", None, None);
+    engine.add_event(2001, "Event Normal Content");
     engine.add_edge(1001, 2001, 1.0); // Feature -> Event
     
     // Path 2: Equal -> Event_Equal
     engine.add_feature(1002, "TargetEqual");
-    engine.add_event(2002, "Event Equal Content", None, None);
+    engine.add_event(2002, "Event Equal Content");
     engine.add_edge(1002, 2002, 1.0);
     
     // Path 3: Inhibit -> Event_Inhibit
     engine.add_feature(1003, "TargetInhibit");
-    engine.add_event(2003, "Event Inhibit Content", None, None);
+    engine.add_event(2003, "Event Inhibit Content");
     engine.add_edge(1003, 2003, 1.0);
     
     // 2. 建立 Ontology 关联
@@ -361,7 +361,7 @@ fn test_scenario_11_ontology(engine: &mut AdvancedEngine) {
     
     // 0. 预埋一个关于 Llama-3 的事件，但初始时不与"逻辑推理"直接关联
     let target_id = 8888;
-    engine.add_event(target_id, "Meta 发布了 Llama-3 模型，它在多项基准测试中表现出色。", None, None);
+    engine.add_event(target_id, "Meta 发布了 Llama-3 模型，它在多项基准测试中表现出色。");
     // 关联到 "Llama-3" 特征 (测试大小写不敏感)
     let feat_llama3 = engine.get_or_create_feature("Llama-3");
     engine.add_edge(feat_llama3, target_id, 1.0);
@@ -489,8 +489,8 @@ fn test_scenario_15(engine: &mut AdvancedEngine) {
     println!("\n--- 测试场景 15: 艾宾浩斯记忆衰减 (Memory Decay) ---");
     let old_id = 9001;
     let new_id = 9002;
-    engine.add_event(old_id, "2024年1月1日，用户在学习 Rust 的生命周期，觉得非常难懂。", None, None);
-    engine.add_event(new_id, "2026年4月1日，用户在复习 Rust 的生命周期，觉得豁然开朗。", None, None);
+    engine.add_event(old_id, "2024年1月1日，用户在学习 Rust 的生命周期，觉得非常难懂。");
+    engine.add_event(new_id, "2026年4月1日，用户在复习 Rust 的生命周期，觉得豁然开朗。");
     // 确保 "rust" 特征存在，避免因为特征不存在导致边添加失败
     let rust_id = engine.get_or_create_feature("rust");
     engine.add_edge(rust_id, old_id, 1.0);
@@ -559,8 +559,8 @@ fn test_v2_temporal_resonance() {
     let mut engine = AdvancedEngine::new();
     
     // 1. 添加带有时间信息的事件
-    engine.add_event(100, "2024年1月1日，Rust在嵌入式领域取得突破", None, None);
-    engine.add_event(101, "2025年1月1日，Python性能大幅提升", None, None);
+    engine.add_event(100, "2024年1月1日，Rust在嵌入式领域取得突破");
+    engine.add_event(101, "2025年1月1日，Python性能大幅提升");
     
     // 2. 模拟相对时间查询：假设当前是 2024-01-02，查询“昨天”
     // 使用与 extract_timestamp 相同的简易时间戳计算公式，确保一致性
@@ -580,12 +580,12 @@ fn test_v2_worldview_agnostic() {
     // 场景 A: 现实世界 (Real World)
     // 假设今天是 2024-02-04
     let real_world_now = (2024 - 1970) * 31536000 + 2 * 2592000 + 4 * 86400; 
-    engine.add_event(2024, "2024年2月3日，AI 伴侣 PR 发布了新版本", None, None);
+    engine.add_event(2024, "2024年2月3日，AI 伴侣 PR 发布了新版本");
     
     // 场景 B: AIPR 世界 (AIPR Worldview)
     // 假设今天是 AIPR 历法的 2026-05-20
     let aipr_world_now = (2026 - 1970) * 31536000 + 5 * 2592000 + 20 * 86400; 
-    engine.add_event(2026, "2026年5月19日，Pero 在张江实验室通过了图灵测试", None, None);
+    engine.add_event(2026, "2026年5月19日，Pero 在张江实验室通过了图灵测试");
     
     // 编译引擎以构建索引
     engine.compile();
@@ -672,7 +672,7 @@ fn test_v2_ontology_pruning() {
     }
     
     // 3. 执行剪枝
-    // V3 Update: use apply_global_decay_and_pruning
+    // V2 Update: use apply_global_decay_and_pruning
     // decay_rate = 1.0 (不衰减), threshold = 6553 (0.1 * 65535)
     engine.apply_global_decay_and_pruning(1.0, 6553);
     
@@ -741,7 +741,7 @@ fn test_scenario_19_emotion(engine: &mut AdvancedEngine) {
     // 1. 添加带有明显情感的事件
     let event_id = 3001;
     let content = "今天真的很开心，不仅代码写得很顺，还收到了朋友的礼物，太棒了！";
-    engine.add_event(event_id, content, None, None);
+    engine.add_event(event_id, content);
     
     // 2. 验证节点情感字段
     if let Some(node) = engine.nodes.get(&event_id) {
@@ -773,7 +773,7 @@ fn test_scenario_19_emotion(engine: &mut AdvancedEngine) {
     // 4. 测试混合情感
     let event_id_mixed = 3002;
     let content_mixed = "虽然这个bug让我很生气，但是解决了之后又觉得很有成就感，挺开心的。";
-    engine.add_event(event_id_mixed, content_mixed, None, None);
+    engine.add_event(event_id_mixed, content_mixed);
     
     if let Some(node) = engine.nodes.get(&event_id_mixed) {
         println!("事件内容: {}", node.content);
@@ -836,8 +836,8 @@ fn test_chaos_simple() {
     }
     
     // 2. 添加少量测试数据 (这将触发 calculate_chaos 向量化)
-    engine.add_event(1, "Rust 是一种高性能的系统编程语言，内存安全。", None, None);
-    engine.add_event(2, "Python 是一种解释型语言，简单易学。", None, None);
+    engine.add_event(1, "Rust 是一种高性能的系统编程语言，内存安全。");
+    engine.add_event(2, "Python 是一种解释型语言，简单易学。");
     
     // 3. 编译
     engine.compile();
@@ -865,7 +865,7 @@ fn test_retrieval_without_vector_model() {
     // 添加事件
     let event_id = 1;
     let summary = "Rust 是一种内存安全的系统编程语言。";
-    engine.add_event(event_id, summary, None, None);
+    engine.add_event(event_id, summary);
 
     // 建立关联: rust -> event
     engine.add_edge(1001, event_id, 1.0);

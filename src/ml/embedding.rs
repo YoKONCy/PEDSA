@@ -220,11 +220,6 @@ impl CandleModel {
         
         Some(vec)
     }
-
-    /// 兼容接口
-    pub fn vectorize(&self, text: &str) -> Option<Vec<f32>> {
-        self.vectorize_weighted(text, &[])
-    }
 }
 
 #[cfg(test)]
@@ -239,7 +234,7 @@ mod tests {
         let model = CandleModel::new();
         if let Ok(m) = model {
             println!("Model loaded successfully!");
-            let vec = m.vectorize("Hello world");
+            let vec = m.vectorize_weighted("Hello world", &[]);
             assert!(vec.is_some());
             let v = vec.unwrap();
             assert_eq!(v.len(), 512);
